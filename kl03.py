@@ -22,8 +22,8 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQu
 # CONFIGURATION
 # ==============================================================================
 
-# ✅ I placed your token here as requested.
-TOKEN = "8123942580:AAHuLCdS84faoJWwUFsgY3ur_jJJoeAOEvA"
+# ✅ FIXED: Now reads token from Railway environment variable
+TOKEN = os.environ.get("TOKEN", "8123942580:AAEnSdMm3L_gN87UjDBHIUOaW4xlTs_S9zg")
 
 # Configure logging
 logging.basicConfig(
@@ -55,7 +55,7 @@ class HostedBot:
         self.bot_dir = os.path.join(HOSTED_BOTS_DIR, f"{user_id}_{bot_hash}")
         self.script_path = os.path.join(self.bot_dir, file_name)
         self.requirements_path = os.path.join(self.bot_dir, 'requirements.txt')
-        
+
         # Path logic for Virtual Environment (Windows vs Linux)
         self.venv_path = os.path.join(self.bot_dir, 'venv')
         if sys.platform == "win32":
@@ -73,7 +73,7 @@ class HostedBot:
         self.stopped_at: Optional[str] = None
         self.crashes = 0
         self.dependencies_installed = False
-        
+
         os.makedirs(self.bot_dir, exist_ok=True)
 
     def to_dict(self):
@@ -140,7 +140,7 @@ class HostedBot:
         for imp in imports:
             package = package_mapping.get(imp, imp)
             packages.append(package)
-        
+
         if packages:
             with open(self.requirements_path, 'w') as f:
                 f.write('\n'.join(packages))
@@ -149,7 +149,7 @@ class HostedBot:
         """Creates a virtual environment for the bot"""
         if os.path.exists(self.venv_python):
             return True, "Venv already exists"
-            
+
         try:
             # Use sys.executable to ensure we use the same python version
             process = await asyncio.create_subprocess_exec(
@@ -158,7 +158,7 @@ class HostedBot:
                 stderr=asyncio.subprocess.PIPE
             )
             stdout, stderr = await process.communicate()
-            
+
             if process.returncode == 0:
                 return True, "Venv created"
             else:
@@ -171,23 +171,23 @@ class HostedBot:
         if not os.path.exists(self.requirements_path):
             self.dependencies_installed = True
             return True, "No dependencies to install"
-            
+
         success, msg = await self.create_venv()
         if not success:
             return False, f"Failed to create environment: {msg}"
-            
+
         try:
             cmd = [self.venv_pip, 'install', '-r', 'requirements.txt']
-            
+
             process = await asyncio.create_subprocess_exec(
                 *cmd,
                 cwd=self.bot_dir,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
-            
+
             stdout, stderr = await process.communicate()
-            
+
             if process.returncode == 0:
                 self.dependencies_installed = True
                 return True, "Dependencies installed successfully"
@@ -195,7 +195,7 @@ class HostedBot:
                 error_msg = stderr.decode()
                 logger.error(f"Dependency installation failed: {error_msg}")
                 return False, f"Installation failed: {error_msg[-200:]}"
-        
+
         except Exception as e:
             logger.error(f"Error installing dependencies: {e}")
             return False, f"Error: {str(e)}"
@@ -204,10 +204,10 @@ class HostedBot:
         """Start the bot script"""
         if self.status == "running":
             return False, "Bot is already running"
-        
+
         if not os.path.exists(self.script_path):
             return False, "Bot script not found"
-        
+
         if not os.path.exists(self.venv_python):
              await self.create_venv()
 
@@ -215,7 +215,7 @@ class HostedBot:
             success, message = await self.install_dependencies()
             if not success:
                 return False, f"Dependency installation failed: {message}"
-        
+
         try:
             # Platform specific flags
             kwargs = {}
@@ -229,14 +229,14 @@ class HostedBot:
                 cwd=self.bot_dir,
                 **kwargs
             )
-            
+
             self.pid = self.process.pid
             self.status = "running"
             self.started_at = datetime.now().isoformat()
-            
+
             logger.info(f"Bot started: {self.file_name} (PID: {self.pid})")
             return True, f"✅ Bot started successfully!\nPID: {self.pid}"
-        
+
         except Exception as e:
             logger.error(f"Failed to start bot: {e}")
             self.status = "error"
@@ -247,7 +247,7 @@ class HostedBot:
         """Stop the bot process"""
         if self.status != "running":
             return False, "Bot is not running"
-        
+
         try:
             if self.pid:
                 try:
@@ -263,15 +263,15 @@ class HostedBot:
                         process.kill()
                 except psutil.NoSuchProcess:
                     pass
-            
+
             if self.process:
                 self.process.terminate()
-                
+
             self.status = "stopped"
             self.stopped_at = datetime.now().isoformat()
             self.pid = None
             return True, "✅ Bot stopped successfully"
-        
+
         except Exception as e:
             return False, f"Failed to stop: {str(e)}"
 
@@ -391,7 +391,7 @@ async def cmd_start(message: types.Message):
     )
 
 async def callback_upload_bot(callback: CallbackQuery, state: FSMContext):
-    await callback.message.edit_text("📤 Send me your <b>.py</b> file.")
+    await callback.message.edit_text("📤 Send me your <b>.py</b> file.", parse_mode="HTML")
     await state.set_state(BotUpload.waiting_for_file)
     await callback.answer()
 
@@ -399,12 +399,13 @@ async def callback_my_bots(callback: CallbackQuery):
     user_bots = db.get_user_bots(callback.from_user.id)
     if not user_bots:
         await callback.message.edit_text("You have no bots.", reply_markup=get_main_keyboard())
+        await callback.answer()
         return
-    
+
     for bot in user_bots:
         await bot.check_status()
     db.save()
-    
+
     text = "📋 <b>Your Hosted Bots</b>\n"
     buttons = []
     for bot in user_bots:
@@ -414,7 +415,7 @@ async def callback_my_bots(callback: CallbackQuery):
             callback_data=f"view_{bot.bot_hash}"
         )])
     buttons.append([InlineKeyboardButton(text="« Back", callback_data="main_menu")])
-    
+
     await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
     await callback.answer()
 
@@ -425,7 +426,7 @@ async def callback_view_bot(callback: CallbackQuery):
         if not bot:
             await callback.answer("Bot not found.", show_alert=True)
             return
-        
+
         await bot.check_status()
         text = f"🤖 <b>{bot.file_name}</b>\nStatus: {bot.status}\nUptime: {bot.get_uptime()}"
         await callback.message.edit_text(text, reply_markup=get_bot_control_keyboard(bot_hash, bot.status), parse_mode="HTML")
@@ -436,7 +437,9 @@ async def callback_view_bot(callback: CallbackQuery):
 async def callback_action_bot(callback: CallbackQuery):
     action, bot_hash = callback.data.split("_", 1)
     bot = db.get_bot(callback.from_user.id, bot_hash)
-    if not bot: return
+    if not bot: 
+        await callback.answer("Bot not found", show_alert=True)
+        return
 
     if action == "start":
         await callback.answer("Starting...", show_alert=False)
@@ -451,7 +454,8 @@ async def callback_action_bot(callback: CallbackQuery):
         success, msg = await bot.restart()
         await callback.answer(msg, show_alert=True)
     elif action == "delete":
-        if bot.status == "running": await bot.stop()
+        if bot.status == "running": 
+            await bot.stop()
         if os.path.exists(bot.bot_dir):
             try:
                 shutil.rmtree(bot.bot_dir)
@@ -466,28 +470,33 @@ async def callback_action_bot(callback: CallbackQuery):
     await callback_view_bot(callback)
 
 async def callback_main_menu(callback: CallbackQuery):
-    await cmd_start(callback.message)
+    await callback.message.edit_text(
+        "🤖 <b>Bot Hosting Service</b>\nUpload .py files to host them.",
+        reply_markup=get_main_keyboard(),
+        parse_mode="HTML"
+    )
+    await callback.answer()
 
 async def handle_document(message: types.Message, state: FSMContext):
     document = message.document
     if not document.file_name.endswith('.py'):
         await message.answer("❌ Only .py files allowed.")
         return
-    
+
     file = await message.bot.get_file(document.file_id)
     file_content = await message.bot.download_file(file.file_path)
     content_bytes = file_content.read()
-    
+
     bot_hash = hashlib.md5(content_bytes).hexdigest()[:16]
-    
+
     hosted_bot = HostedBot(message.from_user.id, bot_hash, document.file_name)
-    
+
     with open(hosted_bot.script_path, 'wb') as f:
         f.write(content_bytes)
-    
+
     hosted_bot.create_requirements()
     db.add_bot(hosted_bot)
-    
+
     await message.answer("✅ Uploaded! Creating environment...", reply_markup=get_bot_control_keyboard(bot_hash, "stopped"))
     await hosted_bot.create_venv()
     await state.clear()
@@ -510,15 +519,13 @@ async def on_shutdown():
             await bot.stop()
 
 async def main():
-    # ✅ I removed the code block that was preventing the bot from running
-    # if the token matched. It now just checks if the token is empty.
     if not TOKEN:
-        print("❌ ERROR: Bot Token is missing.")
+        logger.error("❌ ERROR: Bot Token is missing.")
         return
 
     bot = Bot(token=TOKEN)
     dp = Dispatcher(storage=MemoryStorage())
-    
+
     dp.message.register(cmd_start, Command("start"))
     dp.callback_query.register(callback_upload_bot, F.data == "upload_bot")
     dp.callback_query.register(callback_my_bots, F.data == "my_bots")
@@ -526,11 +533,11 @@ async def main():
     dp.callback_query.register(callback_view_bot, F.data.startswith("view_"))
     dp.callback_query.register(callback_action_bot, F.data.startswith(("start_", "stop_", "restart_", "delete_")))
     dp.message.register(handle_document, F.document, BotUpload.waiting_for_file)
-    
+
     asyncio.create_task(monitor_bots())
-    
+
     try:
-        print("✅ Bot is running...")
+        logger.info("✅ Bot is running...")
         await dp.start_polling(bot)
     finally:
         await on_shutdown()
@@ -540,4 +547,4 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        pass
+        logger.info("Bot stopped by user")
